@@ -60,7 +60,7 @@ local function build_destination_menu(destinations)
 	end)
 
 	for _, dest in ipairs(sorted) do
-		table.insert(cands, { on = dest.key, desc = dest.name })
+		table.insert(cands, { on = dest.key, desc = dest.name .. " (" .. dest.path .. ")" })
 	end
 	return cands
 end
