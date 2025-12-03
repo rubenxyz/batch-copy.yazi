@@ -1,7 +1,7 @@
--- batch-copy.yazi Configuration Example
+-- destination-copy.yazi Configuration Example
 -- Copy this configuration to your ~/.config/yazi/init.lua
 
-require("batch-copy"):setup {
+require("destination-copy"):setup {
   destinations = {
     -- Number keys 0-9 for quick access
     { key = "1", name = "Text-to-Image Input", path = "/Users/username/path/to/destination1" },
@@ -24,5 +24,5 @@ require("batch-copy"):setup {
 -- Add key binding to ~/.config/yazi/keymap.toml:
 -- [[manager.prepend_keymap]]
 -- on = "s"
--- run = "plugin batch-copy"
+-- run = "plugin destination-copy"
 -- desc = "Batch move to configured destination"

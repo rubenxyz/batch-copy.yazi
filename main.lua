@@ -1,8 +1,17 @@
--- batch-copy.yazi Plugin
+-- destination-copy.yazi Plugin
 -- Batch move files to preconfigured destinations with keyboard-driven menu (0-9, a-z)
 -- Moves existing destination files to trash before transferring selected files
 
 local M = {}
+
+-- Sync function to get selected files from cx (must be at top level)
+local get_selected = ya.sync(function()
+	local files = {}
+	for _, file in pairs(cx.active.selected) do
+		table.insert(files, file)
+	end
+	return files
+end)
 
 local function get_config_path()
 	return "~/.config/yazi/init.lua"
@@ -43,6 +52,7 @@ local function validate_destination_exists(path)
 end
 
 -- Build destination menu candidates for ya.which()
+-- Returns both candidates and the sorted destinations list
 local function build_destination_menu(destinations)
 	local cands = {}
 	local sorted = {}
@@ -60,9 +70,9 @@ local function build_destination_menu(destinations)
 	end)
 
 	for _, dest in ipairs(sorted) do
-		table.insert(cands, { on = dest.key, desc = dest.name .. " (" .. dest.path .. ")" })
+		table.insert(cands, { on = dest.key, desc = dest.name })
 	end
-	return cands
+	return cands, sorted
 end
 
 -- Get destination files for trashing
@@ -106,18 +116,19 @@ local function move_files(files, dest_path)
 
 	for _, file in ipairs(files) do
 		local source = tostring(file.url)
-		local target = dest_path .. "/" .. file.url:name()
+		local filename = file.url:name()
+		local target = dest_path .. "/" .. filename
 
 		local child = Command("mv"):args({source, target}):spawn()
 		if not child then
 			ya.err("Failed to move: " .. source)
-			return false, "Failed to move " .. file.url:name()
+			return false, "Failed to move " .. filename
 		end
 
 		local status = child:wait()
 		if not status or not status.success then
 			ya.err("Move failed: " .. source)
-			return false, "Move failed for " .. file.url:name()
+			return false, "Move failed for " .. filename
 		end
 	end
 
@@ -128,13 +139,13 @@ end
 -- Write error report to /tmp/
 local function write_error_report(operation, error_msg, dest_path, files)
 	local timestamp = os.date("%Y%m%d_%H%M%S")
-	local path = "/tmp/batch-copy-error_" .. timestamp .. ".txt"
+	local path = "/tmp/destination-copy-error_" .. timestamp .. ".txt"
 	local content = string.format([[================================================================================
-BATCH-COPY PLUGIN ERROR REPORT
+DESTINATION-COPY PLUGIN ERROR REPORT
 ================================================================================
 
 Timestamp: %s
-Plugin: batch-copy.yazi
+Plugin: destination-copy.yazi
 
 OPERATION DETAILS
 -----------------
@@ -155,6 +166,7 @@ FILES INVOLVED
 	end
 
 	content = content .. [[
+
 RECOVERY SUGGESTIONS
 --------------------
 1. Check trash command: which trash
@@ -181,12 +193,12 @@ end
 
 -- Show error notification
 local function notify_error(msg)
-	ya.notify({ title = "Batch Copy Error", content = msg, level = "error", timeout = 5 })
+	ya.notify({ title = "Destination Copy Error", content = msg, level = "error", timeout = 5 })
 end
 
 -- Main entry method (runs in async context)
-function M.entry(state)
-	ya.dbg("batch-copy plugin started")
+function M.entry(state, job)
+	ya.dbg("destination-copy plugin started")
 
 	-- Validate configuration
 	if not state.destinations or #state.destinations == 0 then
@@ -200,20 +212,19 @@ function M.entry(state)
 		return notify_error("trash command not found. Install: brew install trash")
 	end
 
-	-- Get selected files
-	local selected = ya.sync(function()
-		local f = {}
-		for _, file in ipairs(cx.active.selected) do table.insert(f, file) end
-		return f
-	end)()
+	-- Get selected files using sync block
+	local selected = get_selected()
 	if #selected == 0 then
 		return notify_error("No files selected. Select with Space or visual mode (v)")
 	end
 
 	-- Show menu and get destination
-	local choice = ya.which({ cands = build_destination_menu(state.destinations), silent = false })
+	local cands, sorted = build_destination_menu(state.destinations)
+	local choice = ya.which({ cands = cands, silent = false })
 	if not choice then return end
-	local dest = state.destinations[choice]
+	
+	-- ya.which returns 1-based index, use it to get the destination from sorted list
+	local dest = sorted[choice]
 	if not dest then return notify_error("Invalid destination selection") end
 	if not validate_destination_exists(dest.path) then
 		return notify_error(string.format(
@@ -222,16 +233,15 @@ function M.entry(state)
 		))
 	end
 
-	-- Confirm operation
-	local confirmed = ya.confirm({
-		title = "Confirm Batch Move",
-		content = string.format(
-			"Move %d selected file(s) to:\n%s\n\nExisting files in destination will be moved to Trash.",
-			#selected, dest.path
-		),
-		yes = 1, no = 2,
+	-- Confirm operation using ya.input since ya.confirm API signature is different
+	local value, event = ya.input({
+		title = string.format("Move %d file(s) to %s? (y/n)", #selected, dest.name),
+		position = { "top-center", w = 50 }
 	})
-	if confirmed ~= 1 then return end
+	
+	if not value or (value:lower() ~= "y" and value:lower() ~= "yes") or event ~= 1 then
+		return
+	end
 
 	ya.dbg("Starting batch move to: " .. dest.path)
 
@@ -242,7 +252,7 @@ function M.entry(state)
 		if not ok then
 			local report = write_error_report("Trash Files", err, dest.path, selected)
 			ya.notify({
-				title = "Batch Copy Error",
+				title = "Destination Copy Error",
 				content = "Failed to trash files. Report: " .. (report or "N/A"),
 				level = "error", timeout = 7,
 			})
@@ -255,7 +265,7 @@ function M.entry(state)
 	if not ok then
 		local report = write_error_report("Move Files", err, dest.path, selected)
 		ya.notify({
-			title = "Batch Copy Error",
+			title = "Destination Copy Error",
 			content = "Failed to move files. Report: " .. (report or "N/A"),
 			level = "error", timeout = 7,
 		})
@@ -264,7 +274,7 @@ function M.entry(state)
 
 	ya.dbg("Batch move completed")
 	ya.notify({
-		title = "Batch Copy",
+		title = "Destination Copy",
 		content = string.format("Moved %d file(s) to %s", #selected, dest.name),
 		level = "info", timeout = 3,
 	})
